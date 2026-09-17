@@ -10,6 +10,9 @@ Proves:
 import pytest
 from app.rag_retriever import (
     load_and_chunk_rulebook,
+    load_and_chunk_hipaa_pdf,
+    load_and_chunk_nist_pdf,
+    resolve_framework_collection,
     retrieve_relevant_rule_records,
     retrieve_relevant_rules,
 )
@@ -124,4 +127,83 @@ def test_dynamic_citations_match_retrieved_chunks():
     # Citations must reflect real retrieved rule headers
     assert any("CIS-GCP-5.2" in c for c in expected_citations)
     assert not any("Google Cloud Security Best Practices Guide" in c for c in expected_citations), "Hardcoded fake citation found!"
+
+
+def test_hipaa_pdf_chunking_and_retrieval():
+    """Verifies that HIPAA 45 CFR Part 164 PDF is parsed and technical safeguards are retrievable."""
+    chunks = load_and_chunk_hipaa_pdf()
+    assert len(chunks) >= 7, f"Expected at least 7 HIPAA sections, got {len(chunks)}"
+
+    rule_ids = {c["rule_id"] for c in chunks}
+    assert "HIPAA-164.312" in rule_ids, "Expected HIPAA Technical Safeguards (164.312)"
+    assert "HIPAA-164.308" in rule_ids, "Expected HIPAA Administrative Safeguards (164.308)"
+
+    # Query for transmission security and encryption
+    records = retrieve_relevant_rule_records(
+        query="Technical safeguards encryption and decryption of electronic protected health information ePHI",
+        framework="HIPAA Security Rule 45 CFR Part 164",
+        top_k=2,
+    )
+    assert len(records) >= 1
+    top_rule_ids = [r["rule_id"] for r in records]
+    assert any("312" in rid for rid in top_rule_ids), f"Expected 164.312 in retrieved HIPAA rules, got {top_rule_ids}"
+    assert any("164.312" in r["citation"] for r in records), f"Expected 164.312 in citations, got {[r['citation'] for r in records]}"
+
+
+def test_nist_pdf_chunking_and_retrieval():
+    """Verifies that NIST SP 800-53 Rev 5 PDF is parsed into distinct control chunks and retrievable."""
+    chunks = load_and_chunk_nist_pdf()
+    assert len(chunks) >= 20, f"Expected at least 20 NIST controls, got {len(chunks)}"
+
+    rule_ids = {c["rule_id"] for c in chunks}
+    assert "NIST-AC-3" in rule_ids, "Expected NIST AC-3 Access Enforcement"
+    assert "NIST-SC-28" in rule_ids, "Expected NIST SC-28 Protection of Information at Rest"
+
+    # Query for Protection of Information at Rest
+    records = retrieve_relevant_rule_records(
+        query="Protection of information at rest cryptographic mechanisms",
+        framework="NIST Special Publication 800-53 (Rev. 5)",
+        top_k=2,
+    )
+    assert len(records) >= 1
+    top_rule_ids = [r["rule_id"] for r in records]
+    assert any("SC-28" in rid or "SC-13" in rid or "AC-3" in rid for rid in top_rule_ids), f"Got {top_rule_ids}"
+    assert "NIST SP 800-53 Rev. 5" in records[0]["citation"]
+
+
+def test_multi_framework_routing():
+    """Proves that querying for encryption routes to the exact selected framework collection."""
+    # Query identical topic across 3 different frameworks
+    query = "Encryption at rest cryptographic key management CMEK KMS"
+
+    cis_records = retrieve_relevant_rule_records(
+        query=query,
+        framework="CIS Google Cloud Foundations Benchmark v3.0",
+        top_k=1,
+    )
+    nist_records = retrieve_relevant_rule_records(
+        query=query,
+        framework="NIST Special Publication 800-53 (Rev. 5)",
+        top_k=1,
+    )
+    hipaa_records = retrieve_relevant_rule_records(
+        query=query,
+        framework="HIPAA Security Rule 45 CFR Part 164",
+        top_k=1,
+    )
+
+    assert len(cis_records) == 1
+    assert len(nist_records) == 1
+    assert len(hipaa_records) == 1
+
+    # CIS returns CIS rule
+    assert cis_records[0]["rule_id"].startswith("CIS-")
+    # NIST returns NIST control
+    assert nist_records[0]["rule_id"].startswith("NIST-")
+    # HIPAA returns HIPAA regulation section
+    assert hipaa_records[0]["rule_id"].startswith("HIPAA-")
+
+    # Assert collections are completely disjoint
+    assert cis_records[0]["citation"] != nist_records[0]["citation"]
+    assert nist_records[0]["citation"] != hipaa_records[0]["citation"]
 

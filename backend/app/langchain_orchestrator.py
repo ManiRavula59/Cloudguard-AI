@@ -87,14 +87,20 @@ def format_config_details(config: ResourceConfig) -> str:
     return "\n".join(lines)
 
 
-def _call_vertex_agent_step(prompt_text: str) -> Dict[str, Any]:
+def _call_vertex_agent_step(step_input: Any) -> Dict[str, Any]:
     """LangChain Runnable step: Invokes the Vertex AI Agent Builder client.
 
     Uses RunnableLambda to keep it simple and standard without unnecessary custom LLM subclassing.
     """
-    logger.info("LangChain Pipeline: Dispatching audit prompt to Vertex AI Agent step")
-    # Calls ask_agent in vertex_agent_client.py
-    return ask_agent(prompt_text=prompt_text)
+    if isinstance(step_input, dict):
+        prompt_text = step_input.get("prompt_text", "")
+        framework = step_input.get("framework")
+    else:
+        prompt_text = str(step_input)
+        framework = None
+
+    logger.info("LangChain Pipeline: Dispatching audit prompt to Vertex AI Agent step (framework=%s)", framework)
+    return ask_agent(prompt_text=prompt_text, framework=framework)
 
 
 def _parse_scorecard_step(agent_output: Dict[str, Any]) -> AuditScorecard:
@@ -231,13 +237,18 @@ def _parse_scorecard_step(agent_output: Dict[str, Any]) -> AuditScorecard:
 
 # Construct the LangChain LCEL pipeline
 # PromptTemplate -> RunnableLambda(format prompt string) -> RunnableLambda(ask_agent) -> RunnableLambda(parse)
-def _format_prompt_runnable(inputs: Dict[str, Any]) -> str:
-    return prompt_template.format(
-        compliance_framework=inputs.get("compliance_framework", "CIS Google Cloud Foundations Benchmark v3.0"),
+def _format_prompt_runnable(inputs: Dict[str, Any]) -> Dict[str, Any]:
+    framework = inputs.get("compliance_framework", "CIS Google Cloud Foundations Benchmark v3.0")
+    formatted_prompt = prompt_template.format(
+        compliance_framework=framework,
         resource_type=inputs.get("resource_type", "storage.googleapis.com/Bucket"),
         resource_name=inputs.get("resource_name", "unnamed-resource"),
         config_details=inputs.get("config_details", ""),
     )
+    return {
+        "prompt_text": formatted_prompt,
+        "framework": framework,
+    }
 
 
 audit_chain = (

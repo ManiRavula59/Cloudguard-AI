@@ -81,12 +81,17 @@ def detect_intent(
     return client.detect_intent(request=request)
 
 
-def ask_agent(prompt_text: str, session_id: Optional[str] = None) -> Dict[str, Any]:
-    """High-level entrypoint to query the Vertex AI Compliance Agent.
+def ask_agent(
+    prompt_text: str,
+    session_id: Optional[str] = None,
+    framework: Optional[str] = None,
+) -> Dict[str, Any]:
+    """High-level entrypoint to query the Vertex AI / GenAI Compliance Agent.
 
     Args:
         prompt_text: The complete formatted compliance audit prompt.
         session_id: Optional session identifier; generates a UUID if omitted.
+        framework: Optional compliance framework name (e.g. CIS, NIST 800-53, HIPAA).
 
     Returns:
         Dict containing:
@@ -190,9 +195,10 @@ def ask_agent(prompt_text: str, session_id: Optional[str] = None) -> Dict[str, A
                 location=location,
             )
 
-        # Real RAG Retrieval: retrieve only the top-k most relevant compliance rule chunks
+        # Real RAG Retrieval: retrieve only the top-k most relevant compliance rule chunks for the framework
         retrieved_records = retrieve_relevant_rule_records(
             query=prompt_text,
+            framework=framework,
             top_k=3,
             api_key=settings.gemini_api_key,
         )
@@ -201,24 +207,25 @@ def ask_agent(prompt_text: str, session_id: Optional[str] = None) -> Dict[str, A
             retrieved_context = "\n\n---\n\n".join(r["content"] for r in retrieved_records)
             retrieved_ids = [r["rule_id"] for r in retrieved_records]
             logger.info(
-                "RAG Grounding: Prompt enriched with %d retrieved rules: %s",
+                "RAG Grounding [%s]: Prompt enriched with %d retrieved rules: %s",
+                framework or "Default",
                 len(retrieved_records),
                 retrieved_ids,
             )
         else:
             retrieved_context = "No relevant compliance rules found in vector store."
-            logger.warning("RAG Grounding: No rules retrieved for prompt.")
+            logger.warning("RAG Grounding [%s]: No rules retrieved for prompt.", framework or "Default")
 
+        active_framework_label = framework or "CIS Google Cloud Foundations Benchmark v3.0"
         grounded_prompt = (
-            f"RETRIEVED COMPLIANCE RULEBOOK SECTIONS (via ChromaDB Similarity Search):\n"
+            f"RETRIEVED COMPLIANCE RULES ({active_framework_label} via ChromaDB Similarity Search):\n"
             f"{retrieved_context}\n\n"
             f"AUDIT REQUEST:\n{prompt_text}"
         )
 
-        # Query Vertex AI Agent Platform or Google AI using Gemini with automatic fallback on 503
+        # Query Vertex AI Agent Platform or Google AI using Gemini with automatic retry on 503/429
         primary_model = settings.gemini_model_name if settings.gemini_api_key else "gemini-2.5-flash"
-        candidate_models = [primary_model, "gemini-2.0-flash", "gemini-1.5-flash"]
-        # Remove duplicates while preserving order
+        candidate_models = [primary_model, "gemini-2.5-pro"]
         unique_models = []
         for m in candidate_models:
             if m not in unique_models:
@@ -226,21 +233,39 @@ def ask_agent(prompt_text: str, session_id: Optional[str] = None) -> Dict[str, A
 
         last_err = None
         response = None
+        import time
+
         for model_candidate in unique_models:
-            try:
-                logger.info("Generating compliance audit with model '%s'", model_candidate)
-                response = client.models.generate_content(
-                    model=model_candidate,
-                    contents=grounded_prompt,
-                )
+            for attempt in range(3):
+                try:
+                    logger.info("Generating compliance audit with model '%s' (attempt %d/3)", model_candidate, attempt + 1)
+                    response = client.models.generate_content(
+                        model=model_candidate,
+                        contents=grounded_prompt,
+                    )
+                    break
+                except Exception as gen_err:
+                    last_err = gen_err
+                    err_str = str(gen_err)
+                    if "503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                        wait_sec = (attempt + 1) * 2
+                        logger.warning(
+                            "Model candidate '%s' hit temporary rate/spike error (%s). Backing off for %ds...",
+                            model_candidate,
+                            err_str,
+                            wait_sec,
+                        )
+                        time.sleep(wait_sec)
+                    else:
+                        logger.warning(
+                            "Model candidate '%s' failed (%s). Attempting next candidate if available.",
+                            model_candidate,
+                            err_str,
+                        )
+                        break
+
+            if response is not None:
                 break
-            except Exception as gen_err:
-                last_err = gen_err
-                logger.warning(
-                    "Model candidate '%s' failed (%s). Attempting fallback if available.",
-                    model_candidate,
-                    str(gen_err),
-                )
 
         if response is None:
             raise last_err

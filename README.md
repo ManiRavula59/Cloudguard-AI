@@ -66,16 +66,19 @@ flowchart TD
 
 ## 🔍 Core Architectural Decisions & Honest Boundaries
 
-### 1. Dual-Mode AI Execution Engine
-To ensure CloudGuard AI is production-ready yet immediately runnable without expensive cloud commitments, the backend implements a **dual-mode runtime**:
-* **Standalone / Developer Mode (Default)**:
-  - Connects to Google AI Studio via `GEMINI_API_KEY`.
-  - Grounds evaluations directly against the bundled [`compliance_rulebooks/cis_gcp_benchmark_v3.0.txt`](compliance_rulebooks/cis_gcp_benchmark_v3.0.txt).
-  - Includes **automatic multi-model fallback** (`gemini-2.5-flash` ➔ `gemini-2.0-flash` ➔ `gemini-1.5-flash`) to ensure high-demand 503 capacity limits are handled transparently.
-  - **Zero cloud billing required** for local development, recruiting demonstrations, and testing.
-* **Enterprise Vertex AI Mode (Optional)**:
-  - If a `VERTEX_AGENT_ID` is provided, the engine automatically routes queries to **Dialogflow CX / Vertex AI Agent Builder** using Google's `SessionsClient` (`detect_intent`).
-  - If configured for Vertex AI without an API key, it authenticates via Google Cloud Application Default Credentials (ADC) against `us-central1-aiplatform.googleapis.com`.
+### 1. Multi-Framework RAG Engine (ChromaDB + Gemini Embeddings)
+To ensure compliance audits are backed by authoritative regulatory standards, CloudGuard AI implements a dedicated **vector-retrieval engine**:
+* **ChromaDB Multi-Collection Architecture**:
+  - Automatically indexes regulatory benchmarks into local persistent vector collections under `backend/.chroma_db/`:
+    - **`cis_gcp_benchmark`**: CIS Google Cloud Platform Foundation Benchmarks (`cis_gcp_benchmark_v3.0.txt` and `GCP_CIS_Foundation_Benchmark_v1.2.0.pdf`).
+    - **`nist_sp_800_53`**: NIST SP 800-53 Rev. 5 Security & Privacy Controls (`NIST.SP.800-53r5.pdf`).
+    - **`hipaa_part_164`**: HIPAA Security & Privacy Rule 45 CFR Part 164 (`45 CFR Part 164 (up to date as of 9-15-2026).pdf`).
+  - **Dynamic Framework Routing**: Audits submitted with a specific compliance framework (e.g. HIPAA, NIST SP 800-53, or CIS GCP) automatically route vector similarity search to the matching collection.
+  - **Dynamic Citations**: Citations in the audit scorecard are strictly derived from retrieved rule chunks—zero fabricated or hardcoded citations.
+  - **High-Efficiency Batch Embeddings**: Uses Google's `gemini-embedding-001` (3072 dimensions) with built-in 429 quota backoff retry and local disk caching so embeddings are generated once and queried with sub-second latency.
+* **Dual-Mode AI Runtime**:
+  - **Standalone / Developer Mode (Default)**: Connects via `GEMINI_API_KEY` using Gemini 2.5 Flash with local ChromaDB RAG.
+  - **Enterprise Vertex AI Mode (Optional)**: Connects via `VERTEX_AGENT_ID` using Google Cloud Dialogflow CX / Vertex AI Agent Builder.
 
 ### 2. Why LangChain LCEL Sits Between FastAPI and the LLM
 * **Decoupling Protocol from Routing**: FastAPI handlers only manage HTTP validation, CORS, and response serialization. LangChain LCEL isolates prompt composition, variable formatting, and parsing.
@@ -107,6 +110,7 @@ cloudguardai/
 │   │   ├── __init__.py
 │   │   ├── config.py                 # Pydantic Settings (.env configuration)
 │   │   ├── models.py                 # Pydantic data contracts (ResourceConfig, AuditScorecard)
+│   │   ├── rag_retriever.py          # Multi-framework ChromaDB vector retriever & PDF chunker
 │   │   ├── vertex_agent_client.py    # Dual-mode engine (Gemini Flash RAG & Vertex Agent Builder)
 │   │   ├── langchain_orchestrator.py # LangChain PromptTemplate & RunnableLambda LCEL pipeline
 │   │   ├── workspace_writer.py       # Google Sheets API v4 audit logger (OAuth 2.0)
@@ -115,6 +119,7 @@ cloudguardai/
 │   ├── tests/
 │   │   ├── __init__.py
 │   │   ├── test_client.py            # Task 1 unit tests (LangChain, /audit, error handling)
+│   │   ├── test_rag_retriever.py     # Multi-framework RAG discrimination & citation tests
 │   │   ├── test_workspace.py         # Task 2 unit tests (Google Sheets logging)
 │   │   └── test_vision.py            # Task 3 unit tests (Gemini Vision extraction)
 │   ├── requirements.txt
@@ -128,7 +133,10 @@ cloudguardai/
 │   ├── package.json
 │   └── vite.config.js
 ├── compliance_rulebooks/
-│   └── cis_gcp_benchmark_v3.0.txt   # CIS GCP Benchmark v3.0 rulebook for RAG grounding
+│   ├── cis_gcp_benchmark_v3.0.txt    # CIS GCP Benchmark v3.0 text rulebook
+│   ├── GCP_CIS_Foundation_Benchmark_v1.2.0.pdf # CIS GCP Benchmark v1.2.0 PDF
+│   ├── NIST.SP.800-53r5.pdf          # NIST SP 800-53 Rev. 5 Controls PDF
+│   └── 45 CFR Part 164 (up to date as of 9-15-2026).pdf # HIPAA Security & Privacy Rule PDF
 └── README.md
 ```
 
