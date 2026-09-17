@@ -1,0 +1,109 @@
+================================================================================
+CIS GOOGLE CLOUD FOUNDATIONS BENCHMARK v3.0.0
+COMPLIANCE RULEBOOK & SECURITY POLICIES FOR CLOUDGUARD AI RAG ENGINE
+================================================================================
+
+SECTION 1: IDENTITY AND ACCESS MANAGEMENT (IAM)
+--------------------------------------------------------------------------------
+1.1 Ensure that corporate login credentials are used for GCP administration (Automated)
+Rule ID: CIS-GCP-1.1 | Severity: HIGH
+Description: Use Cloud Identity or Google Workspace corporate accounts rather than personal @gmail.com accounts for all GCP resource management and project administration.
+Remediation: Migrate user accounts to Cloud Identity or Google Workspace domains.
+
+1.2 Ensure that Multi-Factor Authentication (MFA) is enforced for all administrative users (Automated)
+Rule ID: CIS-GCP-1.2 | Severity: CRITICAL
+Description: Multi-Factor Authentication (2-Step Verification) must be strictly enforced on all organizational users with Editor, Owner, or Admin privileges.
+Remediation: In Google Admin Console, enforce 2-Step Verification for all administrative organizational units.
+
+1.3 Ensure Service Account keys are rotated every 90 days or eliminated using Workload Identity (Automated)
+Rule ID: CIS-GCP-1.3 | Severity: HIGH
+Description: User-managed service account keys pose severe credential leakage risks. Rotate keys at least every 90 days, or use Workload Identity Federation instead of static JSON keys.
+Remediation: gcloud iam service-accounts keys list --iam-account=SA_EMAIL and delete aged keys.
+
+
+SECTION 2: GOOGLE CLOUD STORAGE (GCS)
+--------------------------------------------------------------------------------
+2.1 Ensure that Cloud Storage buckets have Public Access Prevention enforced (Automated)
+Rule ID: CIS-GCP-5.2 | Severity: CRITICAL
+Description: Cloud Storage buckets must have Public Access Prevention set to 'enforced' to prevent all public read or write access via allUsers or allAuthenticatedUsers IAM policies or ACLs.
+Policy Requirement: bucket.publicAccessPrevention == "enforced"
+Remediation Command:
+gcloud storage buckets update gs://BUCKET_NAME --public-access-prevention
+
+2.2 Ensure that Cloud Storage buckets have Uniform Bucket-Level Access (UBLA) enabled (Automated)
+Rule ID: CIS-GCP-5.3 | Severity: HIGH
+Description: Enabling Uniform Bucket-Level Access unifies permissions under Cloud IAM and disables legacy, error-prone per-object Access Control Lists (ACLs).
+Policy Requirement: bucket.uniformBucketLevelAccess == true
+Remediation Command:
+gcloud storage buckets update gs://BUCKET_NAME --uniform-bucket-level-access
+
+2.3 Ensure that Cloud Storage buckets are encrypted with Customer-Managed Encryption Keys (CMEK) (Manual)
+Rule ID: CIS-GCP-5.4 | Severity: MEDIUM
+Description: For confidential and regulated customer data, storage buckets should be encrypted using CMEK hosted in Cloud KMS rather than default Google-managed keys.
+Policy Requirement: bucket.encryption.defaultKmsKeyName != null
+Remediation Command:
+gcloud storage buckets update gs://BUCKET_NAME --default-kms-key=projects/PROJECT_ID/locations/LOCATION/keyRings/RING/cryptoKeys/KEY
+
+2.4 Ensure that Cloud Storage bucket versioning is enabled for disaster recovery and ransomware protection (Automated)
+Rule ID: CIS-GCP-5.5 | Severity: MEDIUM
+Description: Object versioning retains historical object states when objects are overwritten or deleted, providing immutable backups and compliance audit recovery.
+Policy Requirement: bucket.versioning.enabled == true
+Remediation Command:
+gcloud storage buckets update gs://BUCKET_NAME --versioning
+
+2.5 Ensure Cloud Storage bucket audit and access logging is enabled (Automated)
+Rule ID: CIS-GCP-5.6 | Severity: MEDIUM
+Description: Storage buckets containing sensitive workloads must have access logs streaming to a designated audit bucket or Cloud Logging for forensic readiness.
+Policy Requirement: bucket.logging.logBucket != null
+Remediation Command:
+gcloud storage buckets update gs://BUCKET_NAME --log-bucket=gs://LOG_BUCKET_NAME --log-object-prefix=gcs-access-logs/
+
+
+SECTION 3: CLOUD SQL DATABASES
+--------------------------------------------------------------------------------
+3.1 Ensure that Cloud SQL database instances require SSL/TLS encryption for all incoming connections (Automated)
+Rule ID: CIS-GCP-6.1 | Severity: CRITICAL
+Description: Database traffic containing sensitive queries and credentials must be encrypted in transit using enforced SSL/TLS.
+Policy Requirement: instance.settings.ipConfiguration.requireSsl == true
+Remediation Command:
+gcloud sql instances patch INSTANCE_NAME --require-ssl
+
+3.2 Ensure that Cloud SQL database instances are not open to the public internet (0.0.0.0/0) (Automated)
+Rule ID: CIS-GCP-6.2 | Severity: CRITICAL
+Description: Authorized networks must not contain the 0.0.0.0/0 CIDR block. Database instances should use Private IP over Cloud Private Service Access (VPC peering).
+Policy Requirement: "0.0.0.0/0" not in instance.settings.ipConfiguration.authorizedNetworks
+Remediation Command:
+gcloud sql instances patch INSTANCE_NAME --clear-authorized-networks
+
+3.3 Ensure that automated backups and Point-In-Time Recovery (PITR) are enabled on Cloud SQL instances (Automated)
+Rule ID: CIS-GCP-6.3 | Severity: HIGH
+Description: Automated backups with binary logging ensure continuous database protection, failover readiness, and Point-In-Time Recovery.
+Policy Requirement: instance.settings.backupConfiguration.enabled == true
+Remediation Command:
+gcloud sql instances patch INSTANCE_NAME --backup-start-time=02:00 --enable-bin-log
+
+
+SECTION 4: COMPUTE ENGINE VIRTUAL MACHINES
+--------------------------------------------------------------------------------
+4.1 Ensure that Compute Engine instances do not have external public IP addresses (Automated)
+Rule ID: CIS-GCP-4.1 | Severity: HIGH
+Description: Virtual machine instances should not have direct public IPv4 addresses assigned. Use Cloud NAT gateways for outbound traffic and Identity-Aware Proxy (IAP) for administrative access.
+Policy Requirement: instance.networkInterfaces[0].accessConfigs == null
+Remediation Command:
+gcloud compute instances delete-access-config INSTANCE_NAME --access-config-name="External NAT"
+
+4.2 Ensure that Compute Engine instances use shielded VM features (Secure Boot, vTPM, Integrity Monitoring) (Automated)
+Rule ID: CIS-GCP-4.2 | Severity: MEDIUM
+Description: Shielded VMs protect against rootkits and boot-level malware by cryptographically verifying the bootloader and kernel integrity.
+Policy Requirement: instance.shieldedInstanceConfig.enableSecureBoot == true
+Remediation Command:
+gcloud compute instances update INSTANCE_NAME --shielded-secure-boot --shielded-vtpm --shielded-vm-integrity-monitoring
+
+
+SECTION 5: LOGGING AND MONITORING
+--------------------------------------------------------------------------------
+5.1 Ensure Cloud Audit Logging is enabled for all GCP services (Automated)
+Rule ID: CIS-GCP-2.1 | Severity: HIGH
+Description: Admin Read, Data Read, and Data Write audit logs should be captured across all supported cloud services to maintain forensic audit trails.
+Remediation: In Cloud IAM, configure default audit log settings to record Data Access logs for Storage, BigQuery, and Cloud SQL.
+================================================================================

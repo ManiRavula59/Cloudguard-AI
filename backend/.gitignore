@@ -1,0 +1,28 @@
+# Environment files & Secrets
+.env
+*.env
+.env.*
+!.env.example
+credentials.json
+token.json
+*token*.json
+*credentials*.json
+service-account*.json
+*.pem
+*.key
+*.p12
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+*.egg-info/
+.pytest_cache/
+
+# OS / Logs
+.vscode/
+.idea/
+*.log
