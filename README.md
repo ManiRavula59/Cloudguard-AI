@@ -1,123 +1,299 @@
-# CloudGuard AI — Automated Compliance & Policy RAG Agent
+# CloudGuard AI — Automated Cloud Security & Compliance Audit Engine
 
-A production-grade, portfolio-ready security compliance microservice built for Google Cloud environments. It audits Google Cloud Platform (GCP) resource configurations against enterprise security baselines (e.g., CIS Google Cloud Foundations Benchmark v3.0, NIST SP 800-53, HIPAA, PCI-DSS) using **Vertex AI Agent Builder**, **RAG**, **LangChain orchestration**, **Google Workspace Sheets integration**, and **Gemini Vision multimodal extraction**.
+[![Python](https://img.shields.io/badge/Python-3.12-blue.svg)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688.svg)](https://fastapi.tiangolo.com/)
+[![React](https://img.shields.io/badge/React-18-61DAFB.svg)](https://react.dev/)
+[![LangChain](https://img.shields.io/badge/LangChain-LCEL-black.svg)](https://python.langchain.com/)
+[![Tests](https://img.shields.io/badge/Tests-19%20Passed-brightgreen.svg)]()
+[![License](https://img.shields.io/badge/License-MIT-green.svg)]()
 
----
+**CloudGuard AI** is a cloud security and governance microservice that evaluates Google Cloud Platform (GCP) configurations against enterprise compliance baselines—grounded in the **CIS Google Cloud Foundations Benchmark v3.0**.
 
-## Architecture Decisions
-
-### 1. Why LangChain sits between FastAPI and the Vertex AI Agent
-In this architecture, LangChain is not a redundant wrapper around an API call — it acts as the **core orchestration and pipeline composition layer**:
-* **Decoupling Orchestration from Vendor SDKs**: FastAPI routes handle HTTP serialization, CORS, and request validation. Directly hardcoding Vertex AI's `SessionsClient` or `DetectIntentRequest` inside FastAPI endpoints tightly couples endpoint handlers to Google's low-level protocol. LangChain abstracts prompt assembly, dynamic variable injection, and output parsing into decoupled Runnables.
-* **Declarative Prompt Engineering (LCEL)**: Using LangChain's `PromptTemplate` provides strict input variable validation (`compliance_framework`, `resource_type`, `resource_name`, `config_details`) and versioned formatting.
-* **Standardized Runnable Composition**: By wrapping `vertex_agent_client.ask_agent()` as a `RunnableLambda`, the compliance flow conforms to the standard LangChain Expression Language (LCEL) chain:
-  $$\text{PromptTemplate} \longrightarrow \text{RunnableLambda(Agent Invocation)} \longrightarrow \text{OutputParser}$$
-  This makes testing, pre-flight safety guardrails, prompt transformations, and downstream structured parsing composable and observable.
-* **Preparation for Multi-Agent & Tool Workflows**: In an enterprise roadmap, compliance evaluation frequently requires multi-step routing (e.g. consulting a CVE vulnerability lookup tool or querying IAM policy analyzers). LangChain provides the foundational harness to expand from single-turn RAG to multi-agent supervisor architectures.
-
-### 2. What is Real vs. What is Scoped (Honest Boundary)
-* **What is 100% Real**:
-  - **Vertex AI Agent Builder Integration**: Real `detect_intent` calls to Dialogflow CX / Vertex AI Agent Builder sessions with regional endpoints (`us-central1`, `global`).
-  - **RAG Grounding**: Real semantic retrieval against compliance rulebook datastores indexed in Vertex AI Search.
-  - **Gemini Multimodal Vision**: Real Google Generative AI vision calls that parse uploaded cloud console screenshots, strictly extracting only legible fields and defaulting unseen fields to `null`.
-  - **Google Workspace Sheets API v4**: Real OAuth 2.0 and Sheets v4 client appending structured audit rows (`[timestamp, resource_name, scorecard_text]`) into an active Google Sheet.
-  - **LangChain Pipeline & FastAPI Gateway**: Real Pydantic data contracts, CORS middleware, and non-blocking error resilience.
-* **What is Deliberately Scoped Out**:
-  - **No Live Cloud Infrastructure Scanning**: CloudGuard AI does **not** call Google Cloud's Asset Inventory or Security Command Center (SCC) APIs to scan live GCP projects. Resource configurations are either supplied as structured JSON payloads or extracted from cloud console screenshots. This boundary is intentional: CloudGuard AI evaluates *configurations*, avoiding elevated IAM permissions or intrusive scans across live client infrastructure.
-
-### 3. Production Cloud Run Deployment Blueprint
-In a production deployment, CloudGuard AI is designed to run as a serverless container on **Google Cloud Run**:
-* **Serverless & Concurrency Tuning**: CloudRun scales to zero during idle periods to eliminate compute costs, while handling up to 80 concurrent audit requests per container instance with minimal latency.
-* **IAM & Workload Identity**: Rather than mounting static JSON credentials, the Cloud Run service binds directly to a dedicated GCP Service Account (`cloudguard-backend-sa`) using Cloud Run runtime service accounts. Calls to Vertex AI Agent Builder authenticate transparently via Google Application Default Credentials (ADC).
-* **Multi-Tenant Isolation**: In a multi-tenant enterprise scenario, CloudGuard AI can implement a per-tenant Service Account impersonation pattern: using Google Cloud IAM Credentials API to mint short-lived OAuth access tokens scoped exclusively to each tenant's specific Vertex AI Datastore and Google Workspace sheet.
+It bridges developer workflows and security operations by combining **LangChain Expression Language (LCEL)**, **Gemini Multimodal Vision**, **Google Workspace Sheets API v4**, and **Vertex AI / Google GenAI** integration.
 
 ---
 
-## Project Structure
+## 🏛️ System Architecture
 
+```mermaid
+flowchart TD
+    subgraph ClientLayer ["Client Layer"]
+        UI["React + Vite Interactive Dashboard\n(http://localhost:5173)"]
+        CLI["Direct API Clients / CI Pipelines"]
+    end
+
+    subgraph APIGateway ["FastAPI Microservice (Port 8000)"]
+        Health["/health & /api/config-status"]
+        AuditEndpoint["POST /audit"]
+        VisionEndpoint["POST /audit-from-screenshot"]
+    end
+
+    subgraph PerceptionLayer ["Perception Layer"]
+        VisionParser["Gemini Vision Extractor\n(google-generativeai / google-genai)\n• Strict Null-Safety (No Guessing)"]
+    end
+
+    subgraph OrchestrationLayer ["LangChain LCEL Pipeline"]
+        Prompt["PromptTemplate\n(CIS v3.0 Framework Injection)"]
+        AgentRunnable["RunnableLambda(ask_agent)\n• Multi-Model Failover"]
+        OutputParser["Scorecard Parser\n• Status, Risk Level, Citations, gcloud Remediation"]
+    end
+
+    subgraph DualRuntime ["AI Runtime Engine (Dual-Mode)"]
+        DevMode["Developer Mode (Default)\nGoogle AI Studio (Gemini 2.5/2.0 Flash)\n+ Local CIS Rulebook Grounding"]
+        EnterpriseMode["Enterprise Mode (Optional)\nVertex AI Agent Builder (SessionsClient)\n+ Google Cloud ADC & Vertex AI Search"]
+    end
+
+    subgraph GovernanceLayer ["Audit Ledger (Non-Blocking)"]
+        Sheets["Google Workspace Sheets API v4\n[Timestamp, Resource, Scorecard]"]
+    end
+
+    UI -->|JSON Config| AuditEndpoint
+    UI -->|Console Screenshot| VisionEndpoint
+    CLI --> AuditEndpoint
+
+    VisionEndpoint --> VisionParser
+    VisionParser -->|Normalized ResourceConfig| AuditEndpoint
+    AuditEndpoint --> Prompt
+    Prompt --> AgentRunnable
+    AgentRunnable <--> DualRuntime
+    AgentRunnable --> OutputParser
+    OutputParser -->|Structured AuditScorecard| AuditEndpoint
+    AuditEndpoint -.->|Non-Blocking Append| Sheets
+    AuditEndpoint -->|JSON Response| UI
 ```
+
+---
+
+## 🔍 Core Architectural Decisions & Honest Boundaries
+
+### 1. Dual-Mode AI Execution Engine
+To ensure CloudGuard AI is production-ready yet immediately runnable without expensive cloud commitments, the backend implements a **dual-mode runtime**:
+* **Standalone / Developer Mode (Default)**:
+  - Connects to Google AI Studio via `GEMINI_API_KEY`.
+  - Grounds evaluations directly against the bundled [`compliance_rulebooks/cis_gcp_benchmark_v3.0.txt`](compliance_rulebooks/cis_gcp_benchmark_v3.0.txt).
+  - Includes **automatic multi-model fallback** (`gemini-2.5-flash` ➔ `gemini-2.0-flash` ➔ `gemini-1.5-flash`) to ensure high-demand 503 capacity limits are handled transparently.
+  - **Zero cloud billing required** for local development, recruiting demonstrations, and testing.
+* **Enterprise Vertex AI Mode (Optional)**:
+  - If a `VERTEX_AGENT_ID` is provided, the engine automatically routes queries to **Dialogflow CX / Vertex AI Agent Builder** using Google's `SessionsClient` (`detect_intent`).
+  - If configured for Vertex AI without an API key, it authenticates via Google Cloud Application Default Credentials (ADC) against `us-central1-aiplatform.googleapis.com`.
+
+### 2. Why LangChain LCEL Sits Between FastAPI and the LLM
+* **Decoupling Protocol from Routing**: FastAPI handlers only manage HTTP validation, CORS, and response serialization. LangChain LCEL isolates prompt composition, variable formatting, and parsing.
+* **Standardized Runnable Composition**:
+  $$\text{PromptTemplate} \longrightarrow \text{RunnableLambda(Agent Invocation)} \longrightarrow \text{OutputParser}$$
+* **Extensibility**: Makes it straightforward to chain additional security checks (e.g., CVE lookups, IAM policy analyzers) without changing API contracts.
+
+### 3. Multimodal Console Vision with Strict Null-Safety
+* DevOps teams often lack raw Terraform or JSON configs and only have a screenshot of a GCP Console page.
+* Gemini Vision extracts visible settings (e.g., `public_access_prevention`, `uniform_bucket_level_access`, `encryption_type`).
+* **Critical Guardrail**: The vision prompt strictly forbids inferring or guessing cloud defaults—unseen settings are explicitly set to `null`.
+* **Zero Duplication**: Extracted configs flow through the *exact same* LangChain audit pipeline used by direct API submissions.
+
+### 4. Non-Blocking Governance Logging
+* Audits can be recorded into a central Google Spreadsheet via Google Sheets API v4.
+* **Resilience**: The write operation is wrapped in a non-blocking exception handler. If credentials expire or a network error occurs, the API client still receives their complete compliance scorecard, while logging an operational warning.
+
+### 5. Scoped Boundary (What It Does NOT Do)
+* CloudGuard AI evaluates **configurations** (JSON or screenshots). It deliberately does **not** perform live port scans or call Security Command Center (SCC) asset crawler APIs to scan running infrastructure. This avoids requiring elevated admin IAM keys across customer production networks.
+
+---
+
+## 📁 Project Structure
+
+```text
 cloudguardai/
 ├── backend/
 │   ├── app/
 │   │   ├── __init__.py
 │   │   ├── config.py                 # Pydantic Settings (.env configuration)
-│   │   ├── models.py                 # Pydantic schemas (ResourceConfig, AuditScorecard)
-│   │   ├── vertex_agent_client.py    # Vertex AI Agent Builder SessionsClient (detect_intent)
+│   │   ├── models.py                 # Pydantic data contracts (ResourceConfig, AuditScorecard)
+│   │   ├── vertex_agent_client.py    # Dual-mode engine (Gemini Flash RAG & Vertex Agent Builder)
 │   │   ├── langchain_orchestrator.py # LangChain PromptTemplate & RunnableLambda LCEL pipeline
-│   │   ├── workspace_writer.py       # Google Sheets API v4 audit logger & OAuth guide
+│   │   ├── workspace_writer.py       # Google Sheets API v4 audit logger (OAuth 2.0)
 │   │   ├── vision_extractor.py       # Gemini Vision screenshot parser
-│   │   └── main.py                   # FastAPI REST API endpoints (/audit, /audit-from-screenshot)
+│   │   └── main.py                   # FastAPI REST API endpoints
 │   ├── tests/
+│   │   ├── __init__.py
 │   │   ├── test_client.py            # Task 1 unit tests (LangChain, /audit, error handling)
 │   │   ├── test_workspace.py         # Task 2 unit tests (Google Sheets logging)
 │   │   └── test_vision.py            # Task 3 unit tests (Gemini Vision extraction)
 │   ├── requirements.txt
-│   └── .env.example
-├── frontend/                         # React + Vite Interactive Compliance Dashboard
+│   ├── .env.example
+│   └── .gitignore
+├── frontend/                         # Interactive Compliance Dashboard
 │   ├── src/
-│   │   ├── App.jsx
-│   │   ├── index.css
-│   │   └── ...
-├── architecture_and_flow.md          # Visual architecture & sequence diagrams
+│   │   ├── App.jsx                   # Main React dashboard (Presets, Audit, Multimodal upload)
+│   │   ├── index.css                 # Clean, responsive CSS styling
+│   │   └── main.jsx
+│   ├── package.json
+│   └── vite.config.js
+├── compliance_rulebooks/
+│   └── cis_gcp_benchmark_v3.0.txt   # CIS GCP Benchmark v3.0 rulebook for RAG grounding
 └── README.md
 ```
 
 ---
 
-## Quickstart & Local Setup
+## 🚀 Quickstart & Local Setup
+
+### Prerequisites
+- Python 3.10+ (Python 3.12 recommended)
+- Node.js 18+ and npm
+- A free [Google AI Studio Gemini API Key](https://aistudio.google.com/)
+
+---
 
 ### 1. Backend Setup
 
-```bash
+```powershell
+# Navigate to backend directory
 cd backend
 
-# 1. Create and activate Python virtual environment
+# Create and activate Python virtual environment
 python -m venv venv
-# On Windows:
-.\venv\Scripts\activate
-# On Linux/macOS:
-source venv/bin/activate
+.\venv\Scripts\activate       # Windows PowerShell
+# source venv/bin/activate    # macOS / Linux
 
-# 2. Install dependencies
+# Install dependencies
 pip install -r requirements.txt
 
-# 3. Configure environment variables
-cp .env.example .env
-# Edit .env with your GCP project ID, Vertex Agent ID, and Gemini API Key
+# Configure environment variables
+copy .env.example .env
 
-# 4. Run the test suite
+# Edit .env and insert your GEMINI_API_KEY:
+# GEMINI_API_KEY=your_actual_gemini_api_key_here
+
+# Run the automated test suite
 pytest tests/ -v
 
-# 5. Start the FastAPI development server
-uvicorn app.main:app --reload --port 8000
+# Start the FastAPI server
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-### 2. Google Workspace Sheets Setup (Optional for Sheet Logging)
-Follow the detailed OAuth setup instructions documented at the top of [`backend/app/workspace_writer.py`](backend/app/workspace_writer.py):
-1. Enable Google Sheets API in Google Cloud Console.
-2. Download your OAuth 2.0 Desktop Client JSON as `credentials.json` into `backend/`.
-3. Set `GOOGLE_SHEET_ID=<YOUR_SPREADSHEET_ID>` in `.env`.
+The backend is now live at:
+- **API Base:** `http://127.0.0.1:8000`
+- **Interactive Swagger Docs:** `http://127.0.0.1:8000/docs`
 
 ---
 
-## API Endpoints
+### 2. Frontend Setup
+
+In a new terminal:
+
+```powershell
+# Navigate to frontend directory
+cd frontend
+
+# Install Node dependencies
+npm install
+
+# Start Vite dev server
+npm run dev
+```
+
+Open your browser at **`http://localhost:5173`**.
+
+---
+
+### 3. Google Workspace Sheets Setup (Optional)
+To log compliance audits into a live Google Sheet:
+1. Enable the **Google Sheets API** in your Google Cloud project.
+2. Create an **OAuth 2.0 Client ID (Desktop Application)** and download it as `credentials.json` into `backend/`.
+3. Create a Google Sheet and set `GOOGLE_SHEET_ID=<YOUR_SHEET_ID>` in `backend/.env`.
+4. The first audit will open a local browser OAuth consent tab; once granted, `token.json` is cached locally.
+
+---
+
+## 📡 API Endpoints
 
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
-| `GET` | `/health` | Service health status and version metadata |
-| `GET` | `/api/config-status` | Inspects configured GCP and integration readiness |
-| `POST` | `/audit` | Audits a structured `ResourceConfig` against a compliance framework |
-| `POST` | `/audit-from-screenshot` | Multimodal endpoint: extracts config from screenshot and audits |
+| `GET` | `/health` | Service readiness, version, and environment status |
+| `GET` | `/api/config-status` | Inspects configured GCP keys and Google Workspace bindings |
+| `POST` | `/audit` | Evaluates a `ResourceConfig` against CIS GCP Benchmark v3.0 |
+| `POST` | `/audit-from-screenshot` | Multimodal upload: extracts settings via Gemini Vision and audits |
+
+### Sample Audit Request Payload:
+```json
+{
+  "compliance_framework": "CIS Google Cloud Foundations Benchmark v3.0",
+  "resource_config": {
+    "resource_type": "storage.googleapis.com/Bucket",
+    "resource_name": "corp-finance-records-prod",
+    "public_access_prevention": "unspecified",
+    "uniform_bucket_level_access": false,
+    "encryption_type": "GOOGLE_MANAGED",
+    "versioning_enabled": false
+  }
+}
+```
+
+### Sample Audit Response:
+```json
+{
+  "resource_name": "corp-finance-records-prod",
+  "framework": "CIS Google Cloud Foundations Benchmark v3.0",
+  "scorecard": {
+    "status": "FAIL",
+    "risk_level": "CRITICAL",
+    "summary": "The corp-finance-records-prod bucket violates foundational security controls...",
+    "violations": [
+      {
+        "rule_id": "CIS-GCP-5.2",
+        "title": "Compliance Violation: CIS-GCP-5.2",
+        "severity": "CRITICAL",
+        "description": "Cloud Storage buckets must have Public Access Prevention set to 'enforced'.",
+        "citation": "CIS Google Cloud Foundations Benchmark v3.0.0",
+        "remediation": "gcloud storage buckets update gs://corp-finance-records-prod --public-access-prevention"
+      }
+    ],
+    "citations": [
+      "CIS Google Cloud Foundations Benchmark v3.0.0",
+      "Google Cloud Security Best Practices Guide"
+    ],
+    "remediation_steps": [
+      "gcloud storage buckets update gs://corp-finance-records-prod --public-access-prevention",
+      "gcloud storage buckets update gs://corp-finance-records-prod --uniform-bucket-level-access"
+    ]
+  },
+  "logged_to_sheet": false,
+  "agent_mode": "live",
+  "error": null
+}
+```
 
 ---
 
-## Interview Talking Points
+## 🧪 Automated Testing
 
-1. *"How did you ground your compliance agent?"*
-   - Built a custom datastore in Vertex AI Agent Builder indexed with the official CIS Google Cloud Foundations Benchmark v3.0 PDF. The generative agent retrieves authoritative citations directly from the datastore.
-2. *"Why not just call Vertex AI directly from FastAPI?"*
-   - Separated orchestration concerns into LangChain using LCEL and `RunnableLambda`. This allows independent prompt templating, multi-stage parsing, and easy extension to tool-calling agents.
-3. *"How do you handle unreadable fields from screenshots?"*
-   - Prompted Gemini Vision explicitly with strict constraints: any attribute not clearly legible must be defaulted to `null` rather than hallucinated or inferred from default cloud states.
-4. *"How resilient is your Google Workspace integration?"*
-   - Google Sheets API writes are wrapped in non-blocking try/except blocks. Even if OAuth expires or a network timeout occurs, the client still receives the complete compliance scorecard with `logged_to_sheet: false` and actionable warning logs.
+The project includes **19 comprehensive unit and integration tests** built with `pytest`:
+
+```powershell
+pytest backend/tests/ -v
+```
+
+```text
+backend/tests/test_client.py .........                                   [ 47%]
+backend/tests/test_vision.py ......                                      [ 78%]
+backend/tests/test_workspace.py ....                                     [100%]
+
+======================= 19 passed, 2 warnings in 1.68s ========================
+```
+
+---
+
+## 🎯 Technical Interview Talking Points
+
+1. **"How did you ground your compliance evaluation to prevent LLM hallucinations?"**
+   - We maintain a curated CIS Google Cloud Foundations Benchmark rulebook. The LangChain LCEL pipeline injects the standard's exact constraints (`bucket.publicAccessPrevention == 'enforced'`) into the prompt and requires strict citation metadata in the output.
+2. **"Why use LangChain instead of just calling Gemini directly from FastAPI?"**
+   - LangChain LCEL provides clean separation of concerns. The prompt assembly, variable validation, model invocation (`RunnableLambda`), and scorecard parsing are modular Runnables. It also allows adding pre-flight safety checks or multi-agent supervisor patterns without rewriting endpoint handlers.
+3. **"How does the multimodal vision pipeline handle unreadable screenshot fields?"**
+   - The vision extractor prompt explicitly enforces strict null-safety: any cloud setting not clearly legible in the image is mapped to `null`. The compliance engine treats `null` as 'unspecified' and evaluates accordingly, preventing hallucinated configurations.
+4. **"How do you handle API capacity spikes?"**
+   - The agent platform client implements an automatic candidate model fallback (`gemini-2.5-flash` ➔ `gemini-2.0-flash` ➔ `gemini-1.5-flash`). If Google's free-tier returns a 503 high-demand spike, the service transparently fails over without failing the user's request.
+
+---
+
+## 📄 License
+This project is open-source and available under the [MIT License](LICENSE).

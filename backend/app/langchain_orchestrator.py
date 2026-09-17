@@ -104,42 +104,47 @@ def _parse_scorecard_step(agent_output: Dict[str, Any]) -> AuditScorecard:
 
     # Parse status (PASS / FAIL / WARNING)
     status = "FAIL"
-    status_match = re.search(r"STATUS\s*:\s*(PASS|FAIL|WARNING)", response_text, re.IGNORECASE)
+    status_match = re.search(r"\*{0,2}STATUS\*{0,2}\s*:\s*\*{0,2}(PASS|FAIL|WARNING)\*{0,2}", response_text, re.IGNORECASE)
     if status_match:
         status = status_match.group(1).upper()
-    elif "no violations found" in response_text.lower() or "compliant" in response_text.lower():
+    elif "non-compliant" in response_text.lower() or "violation" in response_text.lower():
+        status = "FAIL"
+    elif "no violations found" in response_text.lower() or ("compliant" in response_text.lower() and "non-compliant" not in response_text.lower()):
         status = "PASS"
 
     # Parse risk level
     risk_level = "MEDIUM"
-    risk_match = re.search(r"RISK_LEVEL\s*:\s*(CRITICAL|HIGH|MEDIUM|LOW|CLEAN)", response_text, re.IGNORECASE)
+    risk_match = re.search(r"\*{0,2}RISK_LEVEL\*{0,2}\s*:\s*\*{0,2}(CRITICAL|HIGH|MEDIUM|LOW|CLEAN)\*{0,2}", response_text, re.IGNORECASE)
     if risk_match:
         risk_level = risk_match.group(1).upper()
-    elif status == "PASS":
-        risk_level = "CLEAN"
     elif "critical" in response_text.lower():
         risk_level = "CRITICAL"
     elif "high" in response_text.lower():
         risk_level = "HIGH"
+    elif status == "PASS":
+        risk_level = "CLEAN"
 
     # Parse summary
-    summary_match = re.search(r"SUMMARY\s*:\s*([^\n]+(?:\n[^\n#]+)*?)(?=\n[A-Z_\s]+:|$)", response_text)
+    summary_match = re.search(r"\*{0,2}SUMMARY\*{0,2}\s*:\s*\*{0,2}([^\n]+(?:\n[^\n#*]+)*?)(?=\n\s*[-*#]*\s*[A-Z_]+:|$)", response_text)
     if summary_match:
         summary = summary_match.group(1).strip()
     else:
-        # First 200 characters as fallback summary
-        summary = response_text[:200].strip() if response_text else "Audit completed."
+        # First non-empty paragraph as summary
+        paragraphs = [p.strip() for p in response_text.split("\n\n") if p.strip() and not p.startswith("#")]
+        summary = paragraphs[0][:300] if paragraphs else "Compliance audit completed."
 
     # Parse violations
     violations: List[PolicyViolation] = []
+    
+    # Pattern 1: Standard bullet style
     violation_matches = re.finditer(
-        r"^[*\-]\s*(?:\[(?P<rule_id>[^\]]+)\]|(?P<rule_id_alt>CIS-[A-Za-z0-9\.\-]+))\s*[-:]\s*(?:\[(?P<severity>[A-Za-z]+)\])?\s*:?\s*(?P<desc>[^|\n]+)(?:\|\s*Remediation:\s*(?P<remed>[^\n]+))?",
+        r"^[*\-\d\.]+\s*(?:\[(?P<rule_id>[^\]]+)\]|(?P<rule_id_alt>(?:CIS-)?[A-Za-z0-9\.\-]+))\s*[-:]\s*(?:\[(?P<severity>[A-Za-z]+)\])?\s*:?\s*(?P<desc>[^|\n]+)(?:\|\s*Remediation:\s*(?P<remed>[^\n]+))?",
         response_text,
         re.MULTILINE,
     )
     for match in violation_matches:
         rule_id = match.group("rule_id") or match.group("rule_id_alt") or "POLICY-RULE"
-        sev = match.group("severity") or "HIGH"
+        sev = match.group("severity") or risk_level
         desc = match.group("desc").strip().lstrip(": ")
         remed = match.group("remed").strip() if match.group("remed") else None
 
@@ -161,14 +166,44 @@ def _parse_scorecard_step(agent_output: Dict[str, Any]) -> AuditScorecard:
             )
         )
 
-    # Parse remediation steps section (header must be at start of line or after newline)
+    # Pattern 2: Key-value style report (**Rule ID:** CIS-GCP-5.2)
+    if not violations:
+        kv_rule = re.search(r"\*{0,2}Rule ID\*{0,2}:\s*([A-Za-z0-9\.\-]+)", response_text)
+        kv_desc = re.search(r"\*{0,2}Description\*{0,2}:\s*([^\n]+)", response_text)
+        kv_sev = re.search(r"\*{0,2}Severity\*{0,2}:\s*([A-Za-z]+)", response_text)
+        kv_cmd = re.search(r"```(?:bash)?\s*(gcloud[^\n`]+)```", response_text, re.DOTALL)
+
+        if kv_rule or status == "FAIL":
+            rule_name = kv_rule.group(1) if kv_rule else "CIS-GCP-AUDIT"
+            description = kv_desc.group(1).strip() if kv_desc else summary
+            severity = kv_sev.group(1).upper() if kv_sev else risk_level
+            remediation_cmd = kv_cmd.group(1).strip() if kv_cmd else None
+
+            violations.append(
+                PolicyViolation(
+                    rule_id=rule_name,
+                    title=f"Compliance Violation: {rule_name}",
+                    severity=severity,
+                    description=description,
+                    citation="CIS Google Cloud Foundations Benchmark v3.0.0",
+                    remediation=remediation_cmd,
+                )
+            )
+
+    # Parse remediation steps section or extracted bash commands
     remediation_steps: List[str] = []
+    gcloud_matches = re.findall(r"```(?:bash)?\s*(gcloud[^\n`]+)```", response_text, re.DOTALL)
+    for cmd in gcloud_matches:
+        cleaned_cmd = cmd.strip()
+        if cleaned_cmd not in remediation_steps:
+            remediation_steps.append(cleaned_cmd)
+
     remed_section = re.search(r"^(?:#+\s*)?REMEDIATIONS?:\s*(.*)", response_text, re.DOTALL | re.MULTILINE | re.IGNORECASE)
     if remed_section:
         remed_lines = remed_section.group(1).splitlines()
         for line in remed_lines:
             cleaned = line.strip().lstrip("*-123456789. ")
-            if cleaned and not cleaned.startswith("#"):
+            if cleaned and not cleaned.startswith("#") and cleaned not in remediation_steps:
                 remediation_steps.append(cleaned)
 
     return AuditScorecard(

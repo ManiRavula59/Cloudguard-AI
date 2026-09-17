@@ -207,12 +207,35 @@ def ask_agent(prompt_text: str, session_id: Optional[str] = None) -> Dict[str, A
             f"AUDIT REQUEST:\n{prompt_text}"
         )
 
-        # Query Vertex AI Agent Platform or Google AI using Gemini
-        target_model = settings.gemini_model_name if settings.gemini_api_key else "gemini-2.5-flash"
-        response = client.models.generate_content(
-            model=target_model,
-            contents=grounded_prompt,
-        )
+        # Query Vertex AI Agent Platform or Google AI using Gemini with automatic fallback on 503
+        primary_model = settings.gemini_model_name if settings.gemini_api_key else "gemini-2.5-flash"
+        candidate_models = [primary_model, "gemini-2.0-flash", "gemini-1.5-flash"]
+        # Remove duplicates while preserving order
+        unique_models = []
+        for m in candidate_models:
+            if m not in unique_models:
+                unique_models.append(m)
+
+        last_err = None
+        response = None
+        for model_candidate in unique_models:
+            try:
+                logger.info("Generating compliance audit with model '%s'", model_candidate)
+                response = client.models.generate_content(
+                    model=model_candidate,
+                    contents=grounded_prompt,
+                )
+                break
+            except Exception as gen_err:
+                last_err = gen_err
+                logger.warning(
+                    "Model candidate '%s' failed (%s). Attempting fallback if available.",
+                    model_candidate,
+                    str(gen_err),
+                )
+
+        if response is None:
+            raise last_err
 
         response_text = response.text or "No text returned from Agent Platform."
         citations = [
