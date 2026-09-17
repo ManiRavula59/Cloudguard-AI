@@ -35,12 +35,16 @@ CONFIGURATION ATTRIBUTES:
 
 AUDIT INSTRUCTIONS:
 1. Evaluate whether the resource meets the security and governance baseline of {compliance_framework}.
-2. Explicitly cite rule references (e.g. CIS GCP Benchmark 5.2, HIPAA Security Rule § 164.312, etc.).
+2. Explicitly cite rule references (e.g. CIS GCP Benchmark 5.2, HIPAA Security Rule § 164.312, NIST SC-28, etc.).
 3. If public access is enabled or logging/encryption is missing, flag it as a violation.
 4. Structure your response into a clear compliance scorecard:
    - STATUS: [PASS | FAIL | WARNING]
    - RISK_LEVEL: [CRITICAL | HIGH | MEDIUM | LOW | CLEAN]
    - SUMMARY: [Executive summary of security posture]
+   - EXPLANATION: [Clear, comprehensive explanation of the verdict, technical root causes, and security risk impact]
+   - PASS_SUGGESTIONS:
+     * [Specific actionable configuration change 1 required to achieve PASS]
+     * [Specific actionable configuration change 2 required to achieve PASS]
    - VIOLATIONS:
      * [Rule ID] - [Severity]: [Description] (Citation: [Source]) | Remediation: [gcloud command]
    - REMEDIATIONS:
@@ -130,8 +134,11 @@ def _parse_scorecard_step(agent_output: Dict[str, Any]) -> AuditScorecard:
     elif status == "PASS":
         risk_level = "CLEAN"
 
+    # Section lookahead pattern supporting markdown bold and bullet headings
+    section_lookahead = r"(?=\n\s*[-*#]*\s*(?:\*\*)?[A-Z_]+(?:\*\*)?\s*:|$)"
+
     # Parse summary
-    summary_match = re.search(r"\*{0,2}SUMMARY\*{0,2}\s*:\s*\*{0,2}([^\n]+(?:\n[^\n#*]+)*?)(?=\n\s*[-*#]*\s*[A-Z_]+:|$)", response_text)
+    summary_match = re.search(r"\*{0,2}SUMMARY\*{0,2}\s*:\s*\*{0,2}([^\n]+(?:\n[^\n#*]+)*?)" + section_lookahead, response_text)
     if summary_match:
         summary = summary_match.group(1).strip()
     else:
@@ -139,18 +146,35 @@ def _parse_scorecard_step(agent_output: Dict[str, Any]) -> AuditScorecard:
         paragraphs = [p.strip() for p in response_text.split("\n\n") if p.strip() and not p.startswith("#")]
         summary = paragraphs[0][:300] if paragraphs else "Compliance audit completed."
 
+    # Parse explanation
+    explanation_match = re.search(r"\*{0,2}EXPLANATION\*{0,2}\s*:\s*\*{0,2}([^\n]+(?:\n[^\n#*]+)*?)" + section_lookahead, response_text)
+    if explanation_match:
+        explanation = explanation_match.group(1).strip()
+    else:
+        explanation = summary
+
+    # Parse pass suggestions
+    pass_suggestions: List[str] = []
+    sugg_section = re.search(r"\*{0,2}PASS_SUGGESTIONS?\*{0,2}\s*:\s*(.*?)" + section_lookahead, response_text, re.DOTALL | re.IGNORECASE)
+    if sugg_section:
+        for line in sugg_section.group(1).splitlines():
+            cleaned = line.strip().lstrip("*-123456789. ")
+            if cleaned and not cleaned.startswith("#") and cleaned not in pass_suggestions:
+                pass_suggestions.append(cleaned)
+
     # Parse violations
     violations: List[PolicyViolation] = []
     
-    # Pattern 1: Standard bullet style
+    # Pattern 1: Standard bullet style (supports **RULE-ID** and [RULE-ID])
     violation_matches = re.finditer(
-        r"^[*\-\d\.]+\s*(?:\[(?P<rule_id>[^\]]+)\]|(?P<rule_id_alt>(?:CIS-)?[A-Za-z0-9\.\-]+))\s*[-:]\s*(?:\[(?P<severity>[A-Za-z]+)\])?\s*:?\s*(?P<desc>[^|\n]+)(?:\|\s*Remediation:\s*(?P<remed>[^\n]+))?",
+        r"^[*\-\d\.]+\s*(?:\*\*|\[)?(?P<rule_id>(?:CIS-)?[A-Za-z0-9\.\-]+)(?:\*\*|\])?\s*[-:]\s*(?:\*\*|\[)?(?P<severity>[A-Za-z]+)(?:\*\*|\])?\s*:?\s*(?P<desc>[^|\n]+)(?:\|\s*Remediation:\s*(?P<remed>[^\n]+))?",
         response_text,
         re.MULTILINE,
     )
     # Reserved section keywords to ignore if captured as bullet headings
     ignored_keywords = {
-        "STATUS", "SUMMARY", "VIOLATIONS", "REMEDIATIONS", "REMEDIATION",
+        "STATUS", "SUMMARY", "EXPLANATION", "PASS_SUGGESTIONS", "PASS_SUGGESTION",
+        "SUGGESTIONS", "SUGGESTION", "VIOLATIONS", "REMEDIATIONS", "REMEDIATION",
         "CITATIONS", "CITATION", "COMPLIANCE", "SCORECARD", "RISK_LEVEL",
         "RISK", "FRAMEWORK", "NOTE", "WARNING", "-", "--", "AUDIT"
     }
@@ -209,6 +233,17 @@ def _parse_scorecard_step(agent_output: Dict[str, Any]) -> AuditScorecard:
                 )
             )
 
+    # Fallback suggestions to achieve pass if model omitted them
+    if not pass_suggestions:
+        if status == "PASS":
+            pass_suggestions.append("Maintain the current compliant baseline in Terraform and CI/CD security controls.")
+        else:
+            for v in violations:
+                if v.remediation:
+                    pass_suggestions.append(f"Remediate {v.rule_id}: {v.description}")
+                else:
+                    pass_suggestions.append(f"Configure {v.rule_id} to align with mandated security benchmarks.")
+
     # Parse remediation steps section or extracted bash commands
     remediation_steps: List[str] = []
     gcloud_matches = re.findall(r"```(?:bash)?\s*(gcloud[^\n`]+)```", response_text, re.DOTALL)
@@ -229,6 +264,8 @@ def _parse_scorecard_step(agent_output: Dict[str, Any]) -> AuditScorecard:
         status=status,
         risk_level=risk_level,
         summary=summary,
+        explanation=explanation,
+        pass_suggestions=pass_suggestions,
         violations=violations,
         citations=citations,
         remediation_steps=remediation_steps,

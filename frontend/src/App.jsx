@@ -11,7 +11,8 @@ import {
   Info,
   CheckCircle2,
   Server,
-  FileText
+  FileText,
+  Lightbulb
 } from 'lucide-react'
 
 // Realistic preset templates for instant demonstration
@@ -475,6 +476,58 @@ export default function App() {
                 <div className="summary-callout">
                   <strong>Findings Summary:</strong> {auditResult.scorecard.summary}
                 </div>
+
+                {/* Plain-English Audit Explanation */}
+                {auditResult.scorecard.explanation && (
+                  <div style={{
+                    background: '#eff6ff',
+                    border: '1px solid #bfdbfe',
+                    borderRadius: '8px',
+                    padding: '0.85rem 1rem',
+                    marginBottom: '1rem',
+                    fontSize: '0.88rem',
+                    lineHeight: 1.55,
+                    color: '#1e3a8a'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 600, marginBottom: '0.35rem', color: '#1d4ed8' }}>
+                      <Info size={16} /> Why This Verdict Happened (Root Cause & Risk Impact):
+                    </div>
+                    <p style={{ margin: 0, color: '#1e293b' }}>{auditResult.scorecard.explanation}</p>
+                  </div>
+                )}
+
+                {/* Suggestions to Achieve PASS */}
+                {auditResult.scorecard.pass_suggestions && auditResult.scorecard.pass_suggestions.length > 0 && (
+                  <div style={{
+                    background: auditResult.scorecard.status === 'PASS' ? '#f0fdf4' : '#fffbeb',
+                    border: `1px solid ${auditResult.scorecard.status === 'PASS' ? '#bbf7d0' : '#fde68a'}`,
+                    borderRadius: '8px',
+                    padding: '0.85rem 1rem',
+                    marginBottom: '1.25rem',
+                    fontSize: '0.88rem'
+                  }}>
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.4rem',
+                      fontWeight: 600,
+                      marginBottom: '0.4rem',
+                      color: auditResult.scorecard.status === 'PASS' ? '#15803d' : '#b45309'
+                    }}>
+                      {auditResult.scorecard.status === 'PASS' ? <CheckCircle2 size={16} /> : <Lightbulb size={16} />}
+                      {auditResult.scorecard.status === 'PASS'
+                        ? 'Compliant Configuration Verified:'
+                        : 'Actionable Suggestions to Achieve PASS:'}
+                    </div>
+                    <ul style={{ margin: 0, paddingLeft: '1.25rem', color: '#334155', lineHeight: 1.6 }}>
+                      {auditResult.scorecard.pass_suggestions.map((suggestion, sIdx) => (
+                        <li key={sIdx} style={{ marginBottom: '0.2rem' }}>
+                          {suggestion}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
 
                 {/* Violations List */}
                 {auditResult.scorecard.violations && auditResult.scorecard.violations.length > 0 && (

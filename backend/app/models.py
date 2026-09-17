@@ -97,6 +97,14 @@ class AuditScorecard(BaseModel):
         examples=["CRITICAL"],
     )
     summary: str = Field(..., description="Executive summary of the compliance audit findings")
+    explanation: Optional[str] = Field(
+        default=None,
+        description="Clear, plain-English breakdown of why the verdict was assigned and its real-world security impact",
+    )
+    pass_suggestions: List[str] = Field(
+        default_factory=list,
+        description="Actionable configuration change suggestions to successfully flip the verdict to PASS",
+    )
     violations: List[PolicyViolation] = Field(
         default_factory=list,
         description="List of specific rule violations identified by the RAG agent",
