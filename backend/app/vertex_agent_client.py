@@ -224,8 +224,8 @@ def ask_agent(
         )
 
         # Query Vertex AI Agent Platform or Google AI using Gemini with automatic retry on 503/429
-        primary_model = settings.gemini_model_name if settings.gemini_api_key else "gemini-2.5-flash"
-        candidate_models = [primary_model, "gemini-2.5-pro"]
+        primary_model = settings.gemini_model_name if settings.gemini_api_key else "gemini-3.5-flash"
+        candidate_models = [primary_model, "gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-2.5-flash"]
         unique_models = []
         for m in candidate_models:
             if m not in unique_models:

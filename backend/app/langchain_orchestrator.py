@@ -114,7 +114,7 @@ def _parse_scorecard_step(agent_output: Dict[str, Any]) -> AuditScorecard:
 
     # Parse status (PASS / FAIL / WARNING)
     status = "FAIL"
-    status_match = re.search(r"\*{0,2}STATUS\*{0,2}\s*:\s*\*{0,2}(PASS|FAIL|WARNING)\*{0,2}", response_text, re.IGNORECASE)
+    status_match = re.search(r"(?:#{1,6}\s*|\*{0,2})STATUS\*{0,2}\s*[:\n]\s*\*{0,2}(PASS|FAIL|WARNING)\*{0,2}", response_text, re.IGNORECASE)
     if status_match:
         status = status_match.group(1).upper()
     elif "non-compliant" in response_text.lower() or "violation" in response_text.lower():
@@ -124,7 +124,7 @@ def _parse_scorecard_step(agent_output: Dict[str, Any]) -> AuditScorecard:
 
     # Parse risk level
     risk_level = "MEDIUM"
-    risk_match = re.search(r"\*{0,2}RISK_LEVEL\*{0,2}\s*:\s*\*{0,2}(CRITICAL|HIGH|MEDIUM|LOW|CLEAN)\*{0,2}", response_text, re.IGNORECASE)
+    risk_match = re.search(r"(?:#{1,6}\s*|\*{0,2})RISK_LEVEL\*{0,2}\s*[:\n]\s*\*{0,2}(CRITICAL|HIGH|MEDIUM|LOW|CLEAN)\*{0,2}", response_text, re.IGNORECASE)
     if risk_match:
         risk_level = risk_match.group(1).upper()
     elif "critical" in response_text.lower():
@@ -134,32 +134,47 @@ def _parse_scorecard_step(agent_output: Dict[str, Any]) -> AuditScorecard:
     elif status == "PASS":
         risk_level = "CLEAN"
 
-    # Section lookahead pattern supporting markdown bold and bullet headings
-    section_lookahead = r"(?=\n\s*[-*#]*\s*(?:\*\*)?[A-Z_]+(?:\*\*)?\s*:|$)"
+    # Section lookahead pattern supporting markdown headers (### SECTION), bold headings (### **SECTION**), and key-value (SECTION:)
+    section_lookahead = r"(?=\n\s*(?:#{1,6}\s*|\*{0,2}[-*]?\s*)(?:\*\*)?(?:STATUS|RISK[_\s]+LEVEL|SUMMARY|EXPLANATION|PASS[_\s]+SUGGESTIONS?|VIOLATIONS?|REMEDIATIONS?)\b|\Z)"
 
     # Parse summary
-    summary_match = re.search(r"\*{0,2}SUMMARY\*{0,2}\s*:\s*\*{0,2}([^\n]+(?:\n[^\n#*]+)*?)" + section_lookahead, response_text)
-    if summary_match:
-        summary = summary_match.group(1).strip()
+    summary_match = re.search(r"(?:#{1,6}\s*|\*{0,2})(?:\*\*)?SUMMARY\b[^\n]*\n\s*(.*?)\s*" + section_lookahead, response_text, re.DOTALL | re.IGNORECASE)
+    if summary_match and summary_match.group(1).strip():
+        summary = re.sub(r"\n\s*---\s*$", "", summary_match.group(1)).strip()
     else:
-        # First non-empty paragraph as summary
-        paragraphs = [p.strip() for p in response_text.split("\n\n") if p.strip() and not p.startswith("#")]
-        summary = paragraphs[0][:300] if paragraphs else "Compliance audit completed."
+        # Fallback to key-value style
+        kv_sum = re.search(r"\*{0,2}SUMMARY\*{0,2}\s*:\s*\*{0,2}([^\n]+(?:\n[^\n#*]+)*?)" + section_lookahead, response_text)
+        if kv_sum and kv_sum.group(1).strip():
+            summary = kv_sum.group(1).strip()
+        else:
+            paragraphs = [p.strip() for p in response_text.split("\n\n") if p.strip() and not p.startswith("#") and not p.startswith("---")]
+            summary = paragraphs[0][:300] if paragraphs else "Compliance audit completed."
 
     # Parse explanation
-    explanation_match = re.search(r"\*{0,2}EXPLANATION\*{0,2}\s*:\s*\*{0,2}([^\n]+(?:\n[^\n#*]+)*?)" + section_lookahead, response_text)
-    if explanation_match:
-        explanation = explanation_match.group(1).strip()
+    explanation_match = re.search(r"(?:#{1,6}\s*|\*{0,2})(?:\*\*)?EXPLANATION\b[^\n]*\n\s*(.*?)\s*" + section_lookahead, response_text, re.DOTALL | re.IGNORECASE)
+    if explanation_match and explanation_match.group(1).strip():
+        explanation = re.sub(r"\n\s*---\s*$", "", explanation_match.group(1)).strip()
     else:
-        explanation = summary
+        kv_exp = re.search(r"\*{0,2}EXPLANATION\*{0,2}\s*:\s*\*{0,2}([^\n]+(?:\n[^\n#*]+)*?)" + section_lookahead, response_text)
+        if kv_exp and kv_exp.group(1).strip():
+            explanation = kv_exp.group(1).strip()
+        else:
+            explanation = summary
 
     # Parse pass suggestions
     pass_suggestions: List[str] = []
-    sugg_section = re.search(r"\*{0,2}PASS_SUGGESTIONS?\*{0,2}\s*:\s*(.*?)" + section_lookahead, response_text, re.DOTALL | re.IGNORECASE)
+    sugg_section = re.search(r"(?:#{1,6}\s*|\*{0,2})(?:\*\*)?PASS[_\s]+SUGGESTIONS?\b[^\n]*\n\s*(.*?)\s*" + section_lookahead, response_text, re.DOTALL | re.IGNORECASE)
     if sugg_section:
         for line in sugg_section.group(1).splitlines():
-            cleaned = line.strip().lstrip("*-123456789. ")
-            if cleaned and not cleaned.startswith("#") and cleaned not in pass_suggestions:
+            raw_line = line.strip()
+            if not raw_line or raw_line.startswith(("#", "---")):
+                continue
+            cleaned = re.sub(r"^\s*[-*•\d\.]+\s*", "", raw_line).strip()
+            # Ignore introductory or meta-sentences
+            lower_cleaned = cleaned.lower()
+            if any(intro in lower_cleaned for intro in ["to bring this", "to transition", "execute the following", "following configuration changes", "following actions:"]):
+                continue
+            if cleaned and len(cleaned) > 5 and cleaned not in pass_suggestions:
                 pass_suggestions.append(cleaned)
 
     # Parse violations

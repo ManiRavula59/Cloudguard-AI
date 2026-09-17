@@ -299,7 +299,7 @@ backend/tests/test_workspace.py ....                                     [100%]
 3. **"How does the multimodal vision pipeline handle unreadable screenshot fields?"**
    - The vision extractor prompt explicitly enforces strict null-safety: any cloud setting not clearly legible in the image is mapped to `null`. The compliance engine treats `null` as 'unspecified' and evaluates accordingly, preventing hallucinated configurations.
 4. **"How do you handle API capacity spikes?"**
-   - The agent platform client implements an automatic candidate model fallback (`gemini-2.5-flash` ➔ `gemini-2.0-flash` ➔ `gemini-1.5-flash`). If Google's free-tier returns a 503 high-demand spike, the service transparently fails over without failing the user's request.
+   - The agent platform client implements an automatic candidate model fallback (`gemini-3.5-flash` ➔ `gemini-3.5-flash-lite` ➔ `gemini-3.6-flash`). If Google's free-tier returns a 503 high-demand spike or 429 quota throttle, the service transparently backs off and fails over without failing the user's request.
 
 ---
 

@@ -40,9 +40,9 @@ class Settings(BaseSettings):
     gcp_location: str = "us-central1"
     vertex_agent_id: Optional[str] = None
 
-    # Multimodal Vision (Gemini direct API)
+    # Multimodal Vision & Generation (Gemini direct API)
     gemini_api_key: Optional[str] = None
-    gemini_model_name: str = "gemini-2.5-flash"
+    gemini_model_name: str = "gemini-3.5-flash"
 
     # Google Workspace Sheets Integration
     google_sheet_id: Optional[str] = None
