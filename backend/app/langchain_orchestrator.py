@@ -142,10 +142,23 @@ def _parse_scorecard_step(agent_output: Dict[str, Any]) -> AuditScorecard:
         response_text,
         re.MULTILINE,
     )
+    # Reserved section keywords to ignore if captured as bullet headings
+    ignored_keywords = {
+        "STATUS", "SUMMARY", "VIOLATIONS", "REMEDIATIONS", "REMEDIATION",
+        "CITATIONS", "CITATION", "COMPLIANCE", "SCORECARD", "RISK_LEVEL",
+        "RISK", "FRAMEWORK", "NOTE", "WARNING", "-", "--", "AUDIT"
+    }
+
     for match in violation_matches:
-        rule_id = match.group("rule_id") or match.group("rule_id_alt") or "POLICY-RULE"
+        rule_id = match.group("rule_id") or match.group("rule_id_alt") or ""
+        rule_id = rule_id.strip().strip("*_[]")
+        
+        # Skip empty, single punctuation characters, or top-level report header words
+        if not rule_id or len(rule_id) <= 1 or rule_id.upper() in ignored_keywords:
+            continue
+
         sev = match.group("severity") or risk_level
-        desc = match.group("desc").strip().lstrip(": ")
+        desc = match.group("desc").strip().lstrip(":* ")
         remed = match.group("remed").strip() if match.group("remed") else None
 
         # Check for inline citation
@@ -157,8 +170,8 @@ def _parse_scorecard_step(agent_output: Dict[str, Any]) -> AuditScorecard:
 
         violations.append(
             PolicyViolation(
-                rule_id=rule_id.strip(),
-                title=f"Violation in {rule_id.strip()}",
+                rule_id=rule_id,
+                title=f"Violation: {rule_id}",
                 severity=sev.upper(),
                 description=desc,
                 citation=citation,
@@ -185,7 +198,7 @@ def _parse_scorecard_step(agent_output: Dict[str, Any]) -> AuditScorecard:
                     title=f"Compliance Violation: {rule_name}",
                     severity=severity,
                     description=description,
-                    citation="CIS Google Cloud Foundations Benchmark v3.0.0",
+                    citation=citations[0] if citations else None,
                     remediation=remediation_cmd,
                 )
             )

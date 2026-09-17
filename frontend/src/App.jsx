@@ -65,14 +65,20 @@ export default function App() {
   const [filePreview, setFilePreview] = useState(null)
   const [copiedIndex, setCopiedIndex] = useState(null)
   const [systemStatus, setSystemStatus] = useState(null)
+  const [configStatus, setConfigStatus] = useState(null)
   const [errorMessage, setErrorMessage] = useState(null)
 
-  // Fetch API health
+  // Fetch API health and runtime configuration
   useEffect(() => {
     fetch('/health')
       .then(res => res.json())
       .then(data => setSystemStatus(data))
       .catch(() => setSystemStatus({ status: 'offline' }))
+
+    fetch('/api/config-status')
+      .then(res => res.json())
+      .then(data => setConfigStatus(data))
+      .catch(() => {})
   }, [])
 
   const handlePresetSelect = (preset) => {
@@ -181,7 +187,14 @@ export default function App() {
             <Server size={14} /> LangChain LCEL
           </span>
           <span className="badge">
-            <FileText size={14} /> Vertex AI RAG
+            <FileText size={14} />{' '}
+            {auditResult?.agent_mode === 'live-dialogflow'
+              ? 'Vertex AI Agent Builder'
+              : auditResult?.agent_mode === 'live-agent-platform'
+              ? 'Gemini API + Local RAG (ChromaDB)'
+              : configStatus?.vertex_agent_configured
+              ? 'Vertex AI Agent Builder'
+              : 'Gemini API + Local RAG (ChromaDB)'}
           </span>
           <span className={`badge ${systemStatus?.status === 'healthy' ? 'success' : ''}`}>
             ● {systemStatus?.status === 'healthy' ? 'API Connected' : 'Checking Backend'}
@@ -423,6 +436,11 @@ export default function App() {
                     <span className={`risk-tag ${auditResult.scorecard.risk_level.toLowerCase()}`}>
                       Risk: {auditResult.scorecard.risk_level}
                     </span>
+                    <span className="risk-tag" style={{ background: '#f1f5f9', color: '#334155', border: '1px solid #cbd5e1' }}>
+                      {auditResult.agent_mode === 'live-dialogflow'
+                        ? 'Vertex AI Agent Builder'
+                        : 'Gemini API + Local RAG (ChromaDB)'}
+                    </span>
                   </div>
                   <span style={{ fontSize: '0.84rem', color: '#64748b' }}>
                     Target: <strong style={{ color: '#0f172a' }}>{auditResult.resource_name}</strong>
@@ -557,11 +575,12 @@ export default function App() {
 
             <div style={{ background: '#f8fafc', padding: '1.25rem', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
               <h3 style={{ fontSize: '1rem', color: '#1d4ed8', marginBottom: '0.5rem' }}>
-                2. Real Vertex AI RAG Datastore
+                2. Real RAG Retrieval (ChromaDB + Gemini Embeddings)
               </h3>
               <p style={{ fontSize: '0.88rem', color: '#475569', lineHeight: 1.6 }}>
-                Queries official compliance benchmarks (e.g. CIS Google Cloud Benchmark v3.0) indexed inside a Vertex AI Agent Builder Datastore,
-                returning authoritative citations alongside verdicts.
+                Chunks official compliance benchmarks (e.g. CIS Google Cloud Benchmark v3.0) into discrete rules,
+                embeds them using Google's embedding model into a persistent ChromaDB collection, and retrieves only the
+                top-k semantically relevant rules per audit query.
               </p>
             </div>
           </div>

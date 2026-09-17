@@ -166,10 +166,11 @@ def ask_agent(prompt_text: str, session_id: Optional[str] = None) -> Dict[str, A
             logger.error("Unexpected error during Vertex AI Agent detect_intent: %s", str(e))
             raise RuntimeError(f"Vertex AI Agent invocation failed: {str(e)}") from e
 
-    # Mode 2: Modern Agent Platform (Vertex AI via google-genai with CIS benchmark grounding)
+    # Mode 2: Local RAG via ChromaDB with Gemini embeddings (CIS benchmark vector store)
     try:
         from google import genai
         import os
+        from app.rag_retriever import retrieve_relevant_rule_records
 
         # Initialize Gemini Client:
         # If GEMINI_API_KEY is provided, use direct Google AI API (free tier, no billing required).
@@ -189,21 +190,28 @@ def ask_agent(prompt_text: str, session_id: Optional[str] = None) -> Dict[str, A
                 location=location,
             )
 
-        # Load grounded CIS compliance rulebook from local workspace repository
-        rulebook_path = os.path.join(
-            os.path.dirname(__file__),
-            "..",
-            "..",
-            "compliance_rulebooks",
-            "cis_gcp_benchmark_v3.0.txt",
+        # Real RAG Retrieval: retrieve only the top-k most relevant compliance rule chunks
+        retrieved_records = retrieve_relevant_rule_records(
+            query=prompt_text,
+            top_k=3,
+            api_key=settings.gemini_api_key,
         )
-        rulebook_context = ""
-        if os.path.exists(rulebook_path):
-            with open(rulebook_path, "r", encoding="utf-8") as rf:
-                rulebook_context = rf.read()
+
+        if retrieved_records:
+            retrieved_context = "\n\n---\n\n".join(r["content"] for r in retrieved_records)
+            retrieved_ids = [r["rule_id"] for r in retrieved_records]
+            logger.info(
+                "RAG Grounding: Prompt enriched with %d retrieved rules: %s",
+                len(retrieved_records),
+                retrieved_ids,
+            )
+        else:
+            retrieved_context = "No relevant compliance rules found in vector store."
+            logger.warning("RAG Grounding: No rules retrieved for prompt.")
 
         grounded_prompt = (
-            f"REFERENCE COMPLIANCE RULEBOOK:\n{rulebook_context}\n\n"
+            f"RETRIEVED COMPLIANCE RULEBOOK SECTIONS (via ChromaDB Similarity Search):\n"
+            f"{retrieved_context}\n\n"
             f"AUDIT REQUEST:\n{prompt_text}"
         )
 
@@ -238,9 +246,10 @@ def ask_agent(prompt_text: str, session_id: Optional[str] = None) -> Dict[str, A
             raise last_err
 
         response_text = response.text or "No text returned from Agent Platform."
-        citations = [
-            "CIS Google Cloud Foundations Benchmark v3.0.0",
-            "Google Cloud Security Best Practices Guide",
+        
+        # Build dynamic citations strictly from retrieved RAG rule chunks
+        citations: List[str] = [
+            rec["citation"] for rec in retrieved_records if rec.get("citation")
         ]
 
         return {

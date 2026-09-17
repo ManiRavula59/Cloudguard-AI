@@ -26,3 +26,4 @@ env/
 .vscode/
 .idea/
 *.log
+.chroma_db/

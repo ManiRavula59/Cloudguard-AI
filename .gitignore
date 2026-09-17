@@ -39,3 +39,5 @@ Thumbs.db
 .idea/
 *.log
 scratch/
+.chroma_db/
+backend/.chroma_db/
